@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Dino風ジャンプラン — 地面に正しく乗る版</title>
+<style>
+:root{
+  --bg:#f5f8fb;
+  --world-bg: #e9f6ff;
+  --ground:#efefef;
+  --accent:#2b6cb0;
+  --text:#111;
+  --shadow: rgba(0,0,0,0.06);
+  --world-width: 720px;
+  --ground-h: 56px; /* 地面の高さ — JSの定数と合わせること */
+}
+
+/* 基本 */
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  min-height:100vh;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP";
+  background:var(--bg);
+  color:var(--text);
+  display:flex; align-items:center; justify-content:center;
+  padding:28px;
+}
+
+/* レイアウト */
+.container{
+  width:1000px; max-width:100%; display:flex; gap:18px; align-items:flex-start;
+}
+
+/* 左：ゲーム */
+.game-column{ flex:1; display:flex; flex-direction:column; align-items:center; gap:8px; }
+
+/* world: ゲーム領域（中に ground を入れる） */
+.world{
+  width:var(--world-width);
+  max-width:100%;
+  height:400px;
+  background:linear-gradient(180deg,#e9f6ff,#d7ecff);
+  position:relative;
+  border-radius:8px;
+  box-shadow:0 4px 10px var(--shadow);
+  overflow:visible;
+}
+
+/* ground を world の内部に配置（bottom:0） */
+.ground{
+  position:absolute;
+  left:0; right:0; bottom:0;
+  height:var(--ground-h);              /* ← ここが地面の高さ */
+  background:var(--ground);
+  border-radius:0 0 8px 8px;
+  box-shadow: inset 0 1px 0 rgba(0,0,0,0.03);
+  z-index:2;
+}
+
+/* runner（地面の上に立つよう bottom を変えないでおく） */
+.runner{
+  position:absolute;
+  left:80px;
+  /* bottom は JS の GROUND_Y を反映する（初期styleは省略してJSで設定） */
+  width:56px; height:56px; border-radius:8px;
+  display:flex; align-items:center; justify-content:center;
+  font-weight:800; z-index:10;
+}
+
+/* 障害物も地面の上に置く（bottom も JS で合わせる） */
+.ob{ position:absolute; background:#333; color:#fff; border-radius:6px; display:flex; align-items:center; justify-content:center; z-index:8;}
+.ob.short{ width:36px; height:36px; }
+.ob.tall{ width:46px; height:64px; }
+
+/* 右：パネル */
+.panel{ width:240px; max-width:28%; background:#fff; border-radius:8px; padding:14px; box-shadow:0 4px 14px var(--shadow); display:flex; flex-direction:column; gap:12px;}
+.panel h2{margin:0; font-size:18px}
+.score-row{ display:flex; gap:8px; justify-content:space-between; }
+.scorebox{ background:#fff; border:1px solid rgba(0,0,0,0.04); padding:8px 10px; border-radius:8px; text-align:center; font-weight:700; }
+
+/* ボタンなど */
+.btn{ background:var(--accent); color:white; border:none; padding:8px 10px; border-radius:8px; cursor:pointer; font-weight:700; }
+.btn.ghost{ background:transparent; color:var(--accent); border:1px solid rgba(43,108,176,0.12); }
+
+.dir-pad{ display:grid; grid-template-columns:repeat(3,40px); gap:8px; justify-content:center; }
+.dir-pad button{ height:40px; border-radius:8px; border:1px solid rgba(0,0,0,0.06); background:#fff; cursor:pointer; font-weight:700; }
+
+.overlay{ position:absolute; inset:0; display:none; align-items:center; justify-content:center; pointer-events:none; z-index:30; }
+.game-over{ pointer-events:auto; background:white; padding:16px; border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,0.12); text-align:center; }
+
+/* レスポンシブ */
+@media (max-width:920px){
+  .container{ flex-direction:column; align-items:center; gap:12px; }
+  .panel{ width:92%; max-width:720px; }
+  .world{ width:92%; height:44vw; }
+  .ground{ height: calc(var(--ground-h) * 0.8); } /* スマホで少し小さく寄せる */
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="game-column">
+    <!-- world 内に ground を置く（順序は任意だが z-index で管理） -->
+    <div class="world" id="world" aria-label="ゲームワールド">
+      <!-- ランナー（位置はJSで初期化してbottomを合わせる） -->
+      <div class="runner" id="runner">🏃‍➡️</div>
+
+      <!-- game over overlay -->
+      <div class="overlay" id="overlay">
+        <div class="game-over" id="gameOverCard" style="display:none">
+          <h3>Game Over</h3>
+          <p id="finalScore">Score: 0</p>
+          <button class="btn" id="restartBtn">Restart</button>
+        </div>
+      </div>
+
+      <!-- 地面（world の一部） -->
+      <div class="ground" id="ground" aria-hidden="true"></div>
+    </div>
+
+    <!-- （必要なら地面の下に説明バーなど） -->
+    <div style="width:var(--world-width); max-width:100%; height:36px;"></div>
+  </div>
+
+  <aside class="panel" aria-label="操作パネル">
+    <h2>Dino風ジャンプラン</h2>
+    <div class="score-row">
+      <div class="scorebox">Score<br><span id="score">0</span></div>
+      <div class="scorebox">Best<br><span id="best">0</span></div>
+    </div>
+
+    <div style="display:flex; gap:8px;">
+      <button class="btn" id="jumpBtn">Jump ↑</button>
+      <button class="btn ghost" id="pauseBtn">Pause</button>
+    </div>
+
+    <div>
+      <div style="font-size:13px;color:#666;margin-bottom:6px">操作パッド</div>
+      <div class="dir-pad">
+        <div></div>
+        <button id="padUp">↑</button>
+        <div></div>
+        <button id="padLeft">←</button>
+        <button id="padDown">↓</button>
+        <button id="padRight">→</button>
+      </div>
+    </div>
+
+    <div style="margin-top:auto;font-size:13px;color:#666">
+      操作：スペース / ↑ / タップでジャンプ。パネルのボタンでも可能。
+    </div>
+  </aside>
+</div>
+
+<script>
+/*
+  変更ポイント（JS側）
+  - GROUND_H を CSS 変数と同じ値（56）に揃える
+  - runner と obstacle の 'bottom' を ground height に固定して「地面の上」に置く
+  - world 内で left を動かして障害物をスクロール
+  - 衝突判定は getBoundingClientRect()
+*/
+
+const world = document.getElementById('world');
+const runnerEl = document.getElementById('runner');
+const groundEl = document.getElementById('ground');
+const overlay = document.getElementById('overlay');
+const gameOverCard = document.getElementById('gameOverCard');
+const finalScore = document.getElementById('finalScore');
+const scoreEl = document.getElementById('score');
+const bestEl = document.getElementById('best');
+
+const jumpBtn = document.getElementById('jumpBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const restartBtn = document.getElementById('restartBtn');
+const padUp = document.getElementById('padUp');
+const padDown = document.getElementById('padDown');
+
+/* --- 同期させる定数（CSS変数 --ground-h と一致させる） --- */
+const GROUND_H = 56;     // px — *必ず* CSSの --ground-h と合わせてください
+const RUNNER_W = 56;
+const RUNNER_H = 56;
+
+/* 状態 */
+let score = 0;
+let best = Number(localStorage.getItem('runner_best') || 0);
+bestEl.textContent = best;
+
+let lastTime = null;
+let running = true;
+let gameOver = false;
+
+const GRAVITY = 1400;
+const JUMP_V = 540;
+
+let ry = GROUND_H; // runner の bottom を地面高に合わせる（初期：立っている状態）
+let vy = 0;
+
+let obstacles = []; // {el, x, w, h}
+let spawnTimer = 0;
+let spawnInterval = 1200;
+let speed = 260;
+let scoreAcc = 0;
+
+/* ----- 初期セットアップ：ランナー＆グラウンドの位置を合わせる ----- */
+function initPositions(){
+  // ランナーを地面の上に置く（bottom の初期値）
+  runnerEl.style.bottom = GROUND_H + 'px';
+  // 障害物を作るときも bottom を GROUND_H に揃える（spawnObstacleで設定）
+}
+initPositions();
+
+/* 障害物生成 */
+function spawnObstacle(){
+  const isTall = Math.random() < 0.45;
+  const el = document.createElement('div');
+  el.className = 'ob ' + (isTall ? 'tall' : 'short');
+  // world に追加してから左位置を決める
+  world.appendChild(el);
+  const worldRect = world.getBoundingClientRect();
+  const startX = worldRect.width + 20;
+  el.style.left = startX + 'px';
+  // 障害物の bottom を地面高さに揃える（CSS bottom）
+  el.style.bottom = GROUND_H + 'px';
+  const w = isTall ? 46 : 36;
+  const h = isTall ? 64 : 36;
+  obstacles.push({el, x: startX, w, h});
+}
+
+/* 衝突判定（viewport座標で正確に） */
+function checkCollision(){
+  const rRect = runnerEl.getBoundingClientRect();
+  for(const o of obstacles){
+    const oRect = o.el.getBoundingClientRect();
+    if(rRect.left < oRect.right && rRect.right > oRect.left && rRect.top < oRect.bottom && rRect.bottom > oRect.top){
+      return true;
+    }
+  }
+  return false;
+}
+
+/* 更新（dt 秒） */
+function update(dt){
+  if(!running || gameOver) return;
+
+  // 物理（vy は上向き正）
+  vy -= GRAVITY * dt;
+  ry += vy * dt;
+  // 着地判定 — ry が GROUND_H より低くなら地面に戻す
+  if(ry <= GROUND_H){
+    ry = GROUND_H;
+    vy = 0;
+  }
+  // ランナーの translateY を更新（負の値で上方向）
+  runnerEl.style.transform = `translateY(${- (ry - GROUND_H) }px)`;
+  // (解説) runnerEl.style.bottom は固定してあるので transform で垂直移動を表現。
+  // transform を使うと描画が滑らかで高速。
+
+  // 障害物移動（left を直接更新）
+  for(let i = obstacles.length - 1; i >= 0; i--){
+    const o = obstacles[i];
+    o.x -= speed * dt;
+    o.el.style.left = o.x + 'px';
+    // 画面外で削除
+    if(o.x + o.w < -80){
+      o.el.remove();
+      obstacles.splice(i,1);
+    }
+  }
+
+  // スポーン管理
+  spawnTimer += dt * 1000;
+  if(spawnTimer > spawnInterval){
+    spawnTimer = 0;
+    spawnObstacle();
+    spawnInterval = Math.max(520, 900 + (Math.random()*400 - 200));
+  }
+
+  // スコア（時間ベース）
+  scoreAcc += dt * 100;
+  if(scoreAcc >= 1){
+    score += Math.floor(scoreAcc);
+    scoreAcc -= Math.floor(scoreAcc);
+    scoreEl.textContent = score;
+  }
+
+  // 衝突判定
+  if(checkCollision()){
+    endGame();
+  }
+}
+
+/* ループ */
+function loop(ts){
+  if(!lastTime) lastTime = ts;
+  const dt = (ts - lastTime) / 1000;
+  lastTime = ts;
+  update(dt);
+  if(!gameOver) requestAnimationFrame(loop);
+}
+
+/* 入力/アクション */
+function jump(){
+  if(gameOver) return;
+  // on ground?
+  const onGround = Math.abs(ry - GROUND_H) < 0.5;
+  if(onGround){
+    vy = JUMP_V;
+  }
+}
+function togglePause(){
+  running = !running;
+  pauseBtn.textContent = running ? 'Pause' : 'Resume';
+}
+function endGame(){
+  gameOver = true;
+  running = false;
+  overlay.style.display = 'flex';
+  gameOverCard.style.display = 'block';
+  finalScore.textContent = 'Score: ' + score;
+  if(score > best){
+    best = score;
+    localStorage.setItem('runner_best', best);
+    bestEl.textContent = best;
+  }
+}
+function restart(){
+  // clear obstacles
+  obstacles.forEach(o => o.el.remove());
+  obstacles = [];
+  // reset variables
+  spawnTimer = 0;
+  spawnInterval = 1200;
+  speed = 260;
+  score = 0;
+  scoreAcc = 0;
+  vy = 0;
+  ry = GROUND_H;
+  lastTime = null;
+  running = true;
+  gameOver = false;
+  overlay.style.display = 'none';
+  gameOverCard.style.display = 'none';
+  scoreEl.textContent = 0;
+  requestAnimationFrame(loop);
+}
+
+/* イベント */
+window.addEventListener('keydown', e => {
+  if([' ', 'ArrowUp', 'w', 'W'].includes(e.key)) { jump(); e.preventDefault(); }
+  if(e.key === 'p' || e.key === 'P') togglePause();
+});
+world.addEventListener('pointerdown', () => jump());
+jumpBtn.addEventListener('click', jump);
+padUp.addEventListener('click', jump);
+restartBtn.addEventListener('click', restart);
+pauseBtn.addEventListener('click', togglePause);
+padDown.addEventListener('click', ()=>{/* placeholder for duck */});
+
+/* start */
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
